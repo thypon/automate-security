@@ -1,23 +1,51 @@
-name: 'Hello World'
-description: 'Greet someone'
+name: 'Security Automation Action'
+description: 'Automate Security Scanners and normalize them'
 inputs:
-  who-to-greet:  # id of input
-    description: 'Who to greet'
+  slack-token:
+    description: 'Slack token to send reviewdog messages on slack'
+    required: false
+    default: false
+  github-token:
+    description: 'GitHub token. Used by reviewdog to post comments'
     required: true
-    default: 'World'
-outputs:
-  random-number:
-    description: "Random number"
-    value: ${{ steps.random-number-generator.outputs.random-number }}
+    default: ''
+  assignees:
+    description: 'Default assignees if a security issue has been found'
+    required: false
+    default: thypon
 runs:
   using: "composite"
   steps:
-    - run: echo Hello ${{ inputs.who-to-greet }}.
-      shell: bash
-    - id: random-number-generator
-      run: echo "random-number=$(echo $RANDOM)" >> $GITHUB_OUTPUT
-      shell: bash
-    - run: echo "${{ github.action_path }}" >> $GITHUB_PATH
-      shell: bash
-    - run: goodbye.sh
-      shell: bash
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    - uses: reviewdog/action-setup@v1
+      with:
+        reviewdog_version: latest # Optional. [latest,nightly,v.X.Y.Z]
+    - name: Install scanners
+      run: |
+        python3 -m pip install --ignore-installed semgrep
+    - name: Run reviewdog
+      env:
+        REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        reviewdog -reporter=github-pr-review -runners=semgrep -tee
+    - uses: actions-ecosystem/action-add-labels@v1
+      if: ${{ hashFiles('semgrep.log') }}
+      with:
+        github_token: ${{ secrets.github_token }}
+        labels: needs-security-review
+    - uses: actions-ecosystem/action-add-assignees@v1
+      if: ${{ hashFiles('semgrep.log') }}
+      with:
+        github_token: ${{ input..github_token }}
+        assignees: thypon
+    - uses: actions-ecosystem/action-slack-notifier@v1
+      if: ${{ hashFiles('semgrep.log') && input.slack-token }}
+      with:
+        slack_token: ${{ secrets.HOTSPOTS_SLACK_TOKEN }}
+        message: |
+          [semgrep] @${{ github.actor }} pushed commits. /cc @thypon
+        channel: secops-hotspots
+        color: green
+        verbose: true
